@@ -1,30 +1,23 @@
-"""The wiz integration discovery."""
-
-from __future__ import annotations
-
-import asyncio
-from dataclasses import asdict
-import logging
-
-from pywizlight.discovery import DiscoveredBulb, find_wizlights
-
-from homeassistant import config_entries
-from homeassistant.components import network
-from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import discovery_flow
-
-from .const import DOMAIN
-
-_LOGGER = logging.getLogger(__name__)
-
+from ipaddress import ip_network
+from pywizlight.discovery import find_wizlights, DiscoveredBulb
 
 async def async_discover_devices(
-    hass: HomeAssistant, timeout: int
+    hass: HomeAssistant, 
+    timeout: int,
 ) -> list[DiscoveredBulb]:
-    """Discover wiz devices."""
+    """Discover WiZ devices on the current subnet(s) + 192.168.1.0/24."""
+
+    # 1. Discover on HA's directly connected broadcast addresses
     broadcast_addrs = await network.async_get_ipv4_broadcast_addresses(hass)
     targets = [str(address) for address in broadcast_addrs]
+
+    # 2. Add unicast targets for 192.168.1.0/24 (skip .0 and .255)
+    extra_subnet = ip_network("192.168.1.0/24")
+    targets.extend(str(ip) for ip in extra_subnet.hosts())
+
     combined_discoveries: dict[str, DiscoveredBulb] = {}
+
+    # 3. Run discovery in parallel
     for idx, discovered in enumerate(
         await asyncio.gather(
             *[find_wizlights(timeout, address) for address in targets],
@@ -41,18 +34,3 @@ async def async_discover_devices(
             combined_discoveries[device.ip_address] = device
 
     return list(combined_discoveries.values())
-
-
-@callback
-def async_trigger_discovery(
-    hass: HomeAssistant,
-    discovered_devices: list[DiscoveredBulb],
-) -> None:
-    """Trigger config flows for discovered devices."""
-    for device in discovered_devices:
-        discovery_flow.async_create_flow(
-            hass,
-            DOMAIN,
-            context={"source": config_entries.SOURCE_INTEGRATION_DISCOVERY},
-            data=asdict(device),
-        )
